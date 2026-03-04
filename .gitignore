@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 *.out
 *.log
-data/          
 *.h5
 *.nc
+data/  
+logs/
+checkpoints/
+notebooks/
