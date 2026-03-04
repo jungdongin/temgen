@@ -1,10 +1,36 @@
-__pycache__/
-*.pyc
-*.out
-*.log
+# ─── Data (never push to GitHub) ─────────────────────────────────────────────
+data/
 *.h5
-*.nc
-data/  
+*.h5.tmp
+*.zarr/
+*.pt
+*.npy
+
+# ─── Logs & outputs ───────────────────────────────────────────────────────────
 logs/
 checkpoints/
+wandb/
+*.out
+*.err
+
+# ─── Notebooks (exploratory, not for version control) ────────────────────────
 notebooks/
+*.ipynb
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ─── Editors ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
