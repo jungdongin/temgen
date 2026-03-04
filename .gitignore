@@ -1,5 +1,6 @@
 # ─── Data (never push to GitHub) ─────────────────────────────────────────────
-data/
+data/raw
+data/hdf5
 *.h5
 *.h5.tmp
 *.zarr/
