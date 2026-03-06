@@ -1,31 +1,9 @@
-"""
-temgen/models/structure_encoder/__init__.py
+"""Structure encoder components for TEMGen."""
 
-Exposes the structure encoder components.
+from .graph_builder import GraphBuilder
+from .gnn import StructureEncoder
 
-Usage
------
-    from temgen.models.structure_encoder import (
-        GraphBuilder,
-        GaussianRBF,
-        StructureEncoder,
-        CSPLayerCartesian,
-    )
-"""
-
-from .graph_builder import GraphBuilder, GaussianRBF
-from .gnn           import StructureEncoder, CSPLayerCartesian
-
-__all__ = [
-    "GraphBuilder",
-    "GaussianRBF",
-    "StructureEncoder",
-    "CSPLayerCartesian",
-]
-
-
-
-
+__all__ = ["GraphBuilder", "StructureEncoder"]
 
 
 

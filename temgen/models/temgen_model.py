@@ -6,7 +6,7 @@ Top-level TEMGen model.
 Wires together:
     - Image encoder  : CNNFrontend → GeometryTokens → Aggregator (Method 1/2/3)
     - Structure encoder: GraphBuilder → StructureEncoder
-    - InfoNCE loss   : on projected embeddings (z_TEM_proj, z_cell_proj)
+    - Loss           : InfoNCELoss (learnable temperature, in models/losses/)
 
 All hyperparameters are read from an OmegaConf config object loaded from
 configs/cuau_101010.yaml. No magic numbers live here.
@@ -24,6 +24,9 @@ Forward pass:
     → z_cell      : (B, D=256)   structure latent
     → z_TEM_proj  : (B, 128)     image projection  (InfoNCE)
     → z_cell_proj : (B, 128)     structure projection (InfoNCE)
+    → loss        : scalar        symmetric InfoNCE
+    → tau         : scalar        current temperature (detached)
+    → acc         : scalar        in-batch top-1 accuracy
 
 Usage:
     from omegaconf import OmegaConf
@@ -35,7 +38,6 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from omegaconf import DictConfig
 
 from .image_encoder import (
@@ -46,6 +48,7 @@ from .image_encoder import (
     CrossViewVoxelAggregator,
 )
 from .structure_encoder import GraphBuilder, StructureEncoder
+from .losses import InfoNCELoss
 
 
 # ─── Aggregator registry ──────────────────────────────────────────────────────
@@ -73,10 +76,10 @@ class TEMGenModel(nn.Module):
     def __init__(self, cfg: DictConfig):
         super().__init__()
 
-        ie_cfg   = cfg.image_encoder
-        se_cfg   = cfg.structure_encoder
-        g_cfg    = cfg.graph
-        c_cfg    = cfg.contrastive
+        ie_cfg = cfg.image_encoder
+        se_cfg = cfg.structure_encoder
+        g_cfg  = cfg.graph
+        c_cfg  = cfg.contrastive
 
         # ── Image encoder ─────────────────────────────────────────────────────
         self.cnn_frontend = CNNFrontend(
@@ -142,12 +145,12 @@ class TEMGenModel(nn.Module):
             max_atomic_num = se_cfg.max_atomic_num,
         )
 
-        # ── Learnable temperature for InfoNCE ─────────────────────────────────
-        self.log_temp = nn.Parameter(
-            torch.tensor(c_cfg.log_temp_init, dtype=torch.float32)
+        # ── Loss ──────────────────────────────────────────────────────────────
+        self.loss_fn = InfoNCELoss(
+            log_temp_init = c_cfg.log_temp_init,
+            tau_min       = c_cfg.temp_min,
+            tau_max       = c_cfg.temp_max,
         )
-        self.temp_min = c_cfg.temp_min
-        self.temp_max = c_cfg.temp_max
 
         # Store method for forward routing
         self._aggregator_method = method
@@ -175,12 +178,11 @@ class TEMGenModel(nn.Module):
             z_TEM, z_TEM_proj = self.aggregator(Z, attn_bias=None)
 
         elif self._aggregator_method == 2:
-            # Compute anchor positional bias then pass into aggregator
-            attn_bias = self.aggregator._compute_attn_bias(q_coords)
-            z_TEM, z_TEM_proj = self.aggregator(Z, attn_bias=attn_bias)
+            # Method 2 forward takes (Z, q_coords) and computes bias internally
+            z_TEM, z_TEM_proj = self.aggregator(Z, q_coords)
 
         elif self._aggregator_method == 3:
-            # Method 3 doesn't use q_coords in aggregator (voxel grid is static)
+            # Method 3 uses static voxel grid, only needs Z
             z_TEM, z_TEM_proj = self.aggregator(Z)
 
         return z_TEM, z_TEM_proj
@@ -225,7 +227,8 @@ class TEMGenModel(nn.Module):
             z_TEM_proj  : (B, 128)
             z_cell_proj : (B, 128)
             loss        : scalar  InfoNCE loss
-            tau         : scalar  current temperature
+            tau         : scalar  current temperature (detached)
+            acc         : scalar  in-batch top-1 accuracy
         """
         dp    = batch["dp"]       # (B, T, 1, H, W)
         alpha = batch["alpha"]    # (B, T)
@@ -246,53 +249,18 @@ class TEMGenModel(nn.Module):
             lengths_list, angles_list,
         )
 
-        # InfoNCE loss
-        loss, tau = self.info_nce(z_TEM_proj, z_cell_proj)
+        # InfoNCE loss (owns learnable temperature)
+        loss_out = self.loss_fn(z_TEM_proj, z_cell_proj)
 
         return dict(
             z_TEM       = z_TEM,
             z_cell      = z_cell,
             z_TEM_proj  = z_TEM_proj,
             z_cell_proj = z_cell_proj,
-            loss        = loss,
-            tau         = tau,
+            loss        = loss_out["loss"],
+            tau         = loss_out["tau"],
+            acc         = loss_out["acc"],
         )
-
-    # ── InfoNCE loss ──────────────────────────────────────────────────────────
-
-    def info_nce(
-        self,
-        z_tem : torch.Tensor,   # (B, 128)
-        z_cell: torch.Tensor,   # (B, 128)
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Symmetric InfoNCE loss with learnable temperature τ.
-
-        L = -½ Σ_i [ log exp(sim(T_i,C_i)/τ) / Σ_j exp(sim(T_i,C_j)/τ)
-                    + log exp(sim(C_i,T_i)/τ) / Σ_j exp(sim(C_i,T_j)/τ) ]
-
-        Returns:
-            loss : scalar
-            tau  : current temperature value (for logging)
-        """
-        B   = z_tem.shape[0]
-        tau = self.log_temp.exp().clamp(self.temp_min, self.temp_max)
-
-        # L2 normalise
-        z_tem  = F.normalize(z_tem,  dim=-1)   # (B, 128)
-        z_cell = F.normalize(z_cell, dim=-1)   # (B, 128)
-
-        # Similarity matrix
-        logits = z_tem @ z_cell.T / tau        # (B, B)
-
-        # Diagonal = positive pairs
-        labels = torch.arange(B, device=logits.device)
-
-        loss_tc = F.cross_entropy(logits,   labels)
-        loss_ct = F.cross_entropy(logits.T, labels)
-        loss    = (loss_tc + loss_ct) / 2.0
-
-        return loss, tau.detach()
 
     def __repr__(self) -> str:
         method_name = {
@@ -305,15 +273,17 @@ class TEMGenModel(nn.Module):
                                          + list(self.geometry_tokens.parameters())
                                          + list(self.aggregator.parameters()))
         n_struct = sum(p.numel() for p in list(self.structure_encoder.parameters()))
+        n_loss   = sum(p.numel() for p in list(self.loss_fn.parameters()))
         n_total  = sum(p.numel() for p in self.parameters())
 
         return (
             f"TEMGenModel(\n"
             f"  image_encoder  : CNNFrontend → GeometryTokens → {method_name}\n"
             f"  struct_encoder : GraphBuilder → StructureEncoder\n"
-            f"  loss           : symmetric InfoNCE  τ_init={self.log_temp.exp().item():.4f}\n"
+            f"  loss           : InfoNCELoss  τ={self.loss_fn.tau.item():.4f}\n"
             f"  params (image) : {n_img:,}\n"
             f"  params (struct): {n_struct:,}\n"
+            f"  params (loss)  : {n_loss:,}\n"
             f"  params (total) : {n_total:,}\n"
             f")"
         )
@@ -373,6 +343,7 @@ if __name__ == "__main__":
 
         print(f"Method {method}: loss={out['loss'].item():.4f}  "
               f"τ={out['tau'].item():.4f}  "
+              f"acc={out['acc'].item():.4f}  "
               f"z_TEM={tuple(out['z_TEM'].shape)}  "
               f"z_cell={tuple(out['z_cell'].shape)}")
 
@@ -380,5 +351,13 @@ if __name__ == "__main__":
         assert out["z_cell"].shape      == (B, 256)
         assert out["z_TEM_proj"].shape  == (B, 128)
         assert out["z_cell_proj"].shape == (B, 128)
+        assert "acc" in out, "Missing 'acc' in output dict"
+
+    # Verify loss_fn.log_temp is in model parameters
+    param_names = [n for n, _ in model.named_parameters()]
+    assert "loss_fn.log_temp" in param_names, (
+        f"loss_fn.log_temp not found in model parameters: {param_names[-5:]}"
+    )
+    print(f"\nloss_fn.log_temp in model.named_parameters() ✓")
 
     print("\nAll methods passed!")

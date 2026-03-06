@@ -1,37 +1,36 @@
-# ─── Data (never push to GitHub) ─────────────────────────────────────────────
-data/raw
-data/hdf5
-*.h5
-*.h5.tmp
-*.zarr/
-*.pt
-*.npy
-
-# ─── Logs & outputs ───────────────────────────────────────────────────────────
-logs/
-checkpoints/
-wandb/
-*.out
-*.err
-
-# ─── Notebooks (exploratory, not for version control) ────────────────────────
-notebooks/
-*.ipynb
-
-# ─── Python ───────────────────────────────────────────────────────────────────
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
 *.egg-info/
+*.egg
 dist/
 build/
-.eggs/
+*.so
 
-# ─── Editors ──────────────────────────────────────────────────────────────────
+# ── Data (large files — do NOT commit) ────────────────────────────────────────
+data/hdf5/
+data/raw/
+*.h5
+*.hdf5
+*.zarr/
+
+# ── Logs & checkpoints ───────────────────────────────────────────────────────
+logs/
+checkpoints/
+*.ckpt
+wandb/
+
+# ── SLURM outputs ─────────────────────────────────────────────────────────────
+slurm-*.out
+slurm-*.err
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+.DS_Store
 *.swp
 *.swo
-.DS_Store
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+.env
+*.bak

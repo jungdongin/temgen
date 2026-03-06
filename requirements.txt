@@ -1,32 +1,26 @@
-# ─── Core scientific stack ────────────────────────────────────────────────────
-numpy>=1.24
-scipy>=1.10
+# ──────────────────────────────────────────────────────────────────────────────
+# TEMGen requirements
+#
+# PyTorch + CUDA: install via Perlmutter module or conda, NOT pip.
+#   module load pytorch/2.1.0-cu12
+#   OR: conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+#
+# PyG: install after PyTorch is set up.
+#   pip install torch-geometric torch-scatter torch-sparse
+#
+# Everything below can be pip installed directly.
+# ──────────────────────────────────────────────────────────────────────────────
 
-# ─── Materials / structure ────────────────────────────────────────────────────
-pymatgen>=2024.1.1
-ase>=3.22                        # optional but useful for CIF manipulation
+# Config
+omegaconf>=2.3.0
 
-# ─── Data I/O ─────────────────────────────────────────────────────────────────
-h5py>=3.9
-zarr>=2.16,<3.0                  # pinned to v2 (zarr v3 API is different)
+# Data
+h5py>=3.10.0
+zarr>=2.16.0
+numpy>=1.24.0
+pymatgen>=2023.11.0
+tqdm>=4.66.0
 
-# ─── PyTorch — install manually on Perlmutter (see note below) ───────────────
-# torch>=2.1                     # DO NOT pip install on Perlmutter
-# torchvision>=0.16               # use: module load pytorch or conda install
-
-# ─── Graph neural networks ────────────────────────────────────────────────────
-torch-geometric>=2.4             # PyG — after torch is loaded
-torch-scatter                    # required by PyG
-torch-sparse                     # required by PyG
-
-# ─── Training framework ───────────────────────────────────────────────────────
-pytorch-lightning>=2.1
-torchmetrics>=1.2
-
-# ─── Logging & experiment tracking ───────────────────────────────────────────
-wandb>=0.16
-omegaconf>=2.3                   # YAML config with dot-access
-
-# ─── Utilities ────────────────────────────────────────────────────────────────
-tqdm>=4.65
-einops>=0.7                      # tensor rearrange ops (useful for Perceiver)
+# Training
+pytorch-lightning>=2.1.0
+tensorboard>=2.15.0
