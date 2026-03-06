@@ -27,7 +27,7 @@
 #SBATCH --job-name=temgen_train
 #SBATCH --account=m3828
 #SBATCH --qos=preempt
-#SBATCH --constraint=gpu
+#SBATCH --constraint=gpu&hbm80g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
@@ -42,7 +42,7 @@
 # ─── Config ───────────────────────────────────────────────────────────────────
 TEMGEN_DIR="/pscratch/sd/d/dongin/temgen"
 CONFIG="$TEMGEN_DIR/configs/cuau_101010.yaml"
-CKPT_DIR="$TEMGEN_DIR/checkpoints"
+CKPT_DIR="$TEMGEN_DIR/checkpoints/$SLURM_JOB_ID"
 LOG_DIR="$TEMGEN_DIR/logs"
 
 # ─── Environment ──────────────────────────────────────────────────────────────
@@ -65,6 +65,21 @@ export MASTER_PORT=29500
 NNODES=$SLURM_NNODES
 GPUS_PER_NODE=4
 WORLD_SIZE=$((NNODES * GPUS_PER_NODE))
+
+# ─── Save job metadata ───────────────────────────────────────────────────────
+cat > "$CKPT_DIR/job_info.txt" <<EOF
+JOB_ID=$SLURM_JOB_ID
+GPU_CONSTRAINT=$SLURM_JOB_CONSTRAINTS
+QOS=$SLURM_JOB_QOS
+NODES=$SLURM_NNODES
+GPUS_PER_NODE=$GPUS_PER_NODE
+WORLD_SIZE=$WORLD_SIZE
+CONFIG=$CONFIG
+SUBMIT_TIME=$(date)
+
+--- Hyperparameters ($CONFIG) ---
+$(cat "$CONFIG")
+EOF
 
 # ─── Resume from checkpoint if requeued ───────────────────────────────────────
 # preempt QOS + --requeue: job is requeued on preemption.
