@@ -1,10 +1,8 @@
 """
 build_hdf5.py
 
-Converts raw CuAu 10×10×10 data (zarr DPs + CIF structures) into
-compressed HDF5 files for fast training on Perlmutter.
+Converts raw CuAu 10×10×10 data (zarr DPs + CIF structures) into compressed HDF5 files
 
-Output layout (Option B — stacked arrays with CSR-style atom index):
 --------------------------------------------------------------------
 train_YYYYMMDD.h5 / test_YYYYMMDD.h5
     dp                (N, 15, 409, 409)  float16   — log1p-normalised
@@ -20,16 +18,16 @@ train_YYYYMMDD.h5 / test_YYYYMMDD.h5
 Usage
 -----
     # Build train set (13k + 2502)
-    python build_hdf5.py --split train --date 20260304
+    python build_hdf5.py --split train 
 
     # Build test set (252)
-    python build_hdf5.py --split test --date 20260304
+    python build_hdf5.py --split test
 
     # Dry run (process only first 10 samples)
-    python build_hdf5.py --split train --date 20260304 --dry-run
+    python build_hdf5.py --split train --dry-run
 
     # Resume from checkpoint if job was interrupted
-    python build_hdf5.py --split train --date 20260304 --resume
+    python build_hdf5.py --split train --resume
 """
 
 from __future__ import annotations

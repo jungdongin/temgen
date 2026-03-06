@@ -1,0 +1,110 @@
+# configs/cuau_101010.yaml
+#
+# Single source of truth for all TEMGen hyperparameters on the CuAu 10x10x10 dataset.
+# Every controllable variable across all modules is defined here.
+# Load with OmegaConf:
+#   from omegaconf import OmegaConf
+#   cfg = OmegaConf.load("configs/cuau_101010.yaml")
+
+# ─── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  # Physical parameters (fixed by simulation, do not change)
+  T: 15                          # number of tilts per sample
+  H: 409                         # DP image height (pixels)
+  W: 409                         # DP image width  (pixels)
+  tilt_axis: "y"                 # rotation axis for multi-tilt series
+  max_angle_mrad: 80             # detector max angle (mrad)
+  beam_energy_keV: 300           # electron beam energy
+  roi_nm: [1.5, 1.5, 5.0]       # ROI dimensions [x, y, z] in nm
+  species: [29, 79]              # Cu=29, Au=79
+
+  # Tilt angles: -7° to +7°, step 1° → converted to radians at load time
+  tilt_deg_min: -7
+  tilt_deg_max:  7
+  tilt_deg_step: 1
+
+# ─── Data pipeline ────────────────────────────────────────────────────────────
+data:
+  train_h5: /pscratch/sd/d/dongin/temgen/data/hdf5/train_20260304.h5
+  test_h5:  /pscratch/sd/d/dongin/temgen/data/hdf5/test_20260304.h5
+
+  val_fraction: 0.1              # fraction of train set used for validation
+  seed: 42                       # random seed for train/val split
+
+  num_workers: 8                 # DataLoader worker processes
+  prefetch_factor: 2             # batches to prefetch per worker
+  persistent_workers: true       # keep workers alive between epochs
+  pin_memory: true               # faster CPU→GPU transfers
+
+# ─── Graph builder (structure encoder preprocessing) ──────────────────────────
+graph:
+  r_c: 5.0                       # radius cutoff (Å)  — captures ≤3NN shells
+  K_rbf: 50                      # number of Gaussian RBF centers
+  max_num_neighbors: 64          # max neighbours per atom in radius_graph
+
+# ─── Image encoder ────────────────────────────────────────────────────────────
+image_encoder:
+  d_model: 256                   # token dimension D  (fixed throughout)
+  K_fourier: 10                  # Fourier bands for geometry/angle embeddings
+  pretrained_cnn: false          # load ImageNet weights for ResNet-18
+
+  # Aggregator selection: 1 = Perceiver, 2 = Geometry-Aware Perceiver, 3 = Voxel
+  aggregator_method: 1
+
+  # Method 1 & 2: Perceiver Latent
+  n_latents: 32                  # number of learnable latent tokens
+  n_heads: 8                     # attention heads  (d_head = 256/8 = 32)
+  L_cross: 1                     # number of cross-attention blocks
+  L_self: 2                      # self-attention blocks per cross block
+  d_ff: 1024                     # FFN hidden dim  (4 × d_model)
+
+  # Method 2 only: Geometry-Aware Perceiver
+  beta_init: 1.0                 # initial β scale for positional bias
+  sigma_init: 0.5                # initial σ width for Gaussian bias
+
+  # Method 3 only: Cross-View Voxel Latent
+  voxel_nx: 8                    # voxel grid x dimension
+  voxel_ny: 8                    # voxel grid y dimension
+  voxel_nz: 2                    # voxel grid z dimension  (asymmetric: ±sin7°)
+  L_blocks: 2                    # cross+self attention blocks
+
+  # Projection head (all methods)
+  d_proj: 128                    # output dim for InfoNCE loss
+
+# ─── Structure encoder ────────────────────────────────────────────────────────
+structure_encoder:
+  hidden_dim: 128                # GNN hidden dimension d
+  n_layers: 4                    # number of CSPLayerCartesian layers
+  d_out: 256                     # readout output dim  (→ shared latent space)
+  d_proj: 128                    # projection head output dim for InfoNCE
+  max_atomic_num: 118            # embedding table size  (full periodic table)
+
+# ─── Contrastive loss ─────────────────────────────────────────────────────────
+contrastive:
+  log_temp_init: 2.6593          # initial log(1/τ) = log(1/0.07) ≈ 2.6593
+  temp_min: 0.01                 # minimum temperature clamp
+  temp_max: 1.0                  # maximum temperature clamp
+
+# ─── Training ─────────────────────────────────────────────────────────────────
+training:
+  batch_size: 256                # samples per batch
+  epochs: 200                    # total training epochs
+  warmup_epochs: 10              # linear LR warmup
+
+  optimizer: adamw
+  lr: 3.0e-4                     # peak learning rate
+  weight_decay: 1.0e-4           # AdamW weight decay
+  betas: [0.9, 0.999]            # Adam β1, β2
+  eps: 1.0e-8                    # Adam ε
+
+  lr_schedule: cosine            # cosine decay after warmup
+  grad_clip_norm: 1.0            # gradient clipping max norm
+
+  mixed_precision: true          # FP16 autocast
+  grad_accumulation_steps: 1     # set to 2 if batch_size=128
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+paths:
+  log_dir:  /pscratch/sd/d/dongin/temgen/logs
+  ckpt_dir: /pscratch/sd/d/dongin/temgen/checkpoints
+  wandb_project: temgen-cuau-101010

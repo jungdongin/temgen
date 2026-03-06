@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
-#SBATCH --time=06:00:00
+#SBATCH --time=10:00:00
 #SBATCH -o /pscratch/sd/d/dongin/temgen/logs/slurm/build_hdf5_%j.out
 #SBATCH -e /pscratch/sd/d/dongin/temgen/logs/slurm/build_hdf5_%j.err
 
