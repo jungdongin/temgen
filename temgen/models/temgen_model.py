@@ -249,7 +249,7 @@ class TEMGenModel(nn.Module):
             lengths_list, angles_list,
         )
 
-        # InfoNCE loss (owns learnable temperature)
+        # InfoNCE loss (gathers across GPUs internally for full-batch negatives)
         loss_out = self.loss_fn(z_TEM_proj, z_cell_proj)
 
         return dict(

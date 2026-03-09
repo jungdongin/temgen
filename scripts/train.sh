@@ -27,13 +27,13 @@
 #SBATCH --job-name=temgen_train
 #SBATCH --account=m3828
 #SBATCH --qos=preempt
-#SBATCH --constraint=gpu&hbm80g
+#SBATCH --constraint=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
-#SBATCH --time=48:00:00
+#SBATCH --time=8:00:00
 #SBATCH --requeue
 #SBATCH --signal=SIGUSR1@120
 #SBATCH -o /pscratch/sd/d/dongin/temgen/logs/slurm/train_%j.out
@@ -41,7 +41,7 @@
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 TEMGEN_DIR="/pscratch/sd/d/dongin/temgen"
-CONFIG="$TEMGEN_DIR/configs/cuau_101010.yaml"
+CONFIG="${1:-$TEMGEN_DIR/configs/cuau_101010_3.yaml}"
 CKPT_DIR="$TEMGEN_DIR/checkpoints/$SLURM_JOB_ID"
 LOG_DIR="$TEMGEN_DIR/logs"
 

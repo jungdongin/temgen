@@ -72,6 +72,8 @@ def collect_embeddings(
         for k, v in batch.items():
             if isinstance(v, torch.Tensor):
                 batch_gpu[k] = v.to(device, non_blocking=True)
+            elif isinstance(v, list) and v and isinstance(v[0], torch.Tensor):
+                batch_gpu[k] = [t.to(device, non_blocking=True) for t in v]
             else:
                 batch_gpu[k] = v
 

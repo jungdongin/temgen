@@ -4,7 +4,7 @@ setup(
     name="temgen",
     version="0.1.0",
     description="TEM diffraction pattern + crystal structure contrastive learning",
-    author="Dongin Kim",
+    author="Dongin Jung",
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[

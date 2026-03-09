@@ -3,7 +3,7 @@
 from .cnn_frontend import CNNFrontend
 from .geometry_tokens import GeometryTokens
 from .aggregator import PerceiverAggregator
-from .geometry_aware_perceiver import GeometryAwarePerceiverAggregator
+from .geometry_aware_aggregator import GeometryAwarePerceiverAggregator
 from .cross_view_voxel_aggregator import CrossViewVoxelAggregator
 
 __all__ = [

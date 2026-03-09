@@ -34,6 +34,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from omegaconf import DictConfig
 
+from temgen.models.losses.info_nce import InfoNCELoss
+
 
 class TEMGenLightningModule(pl.LightningModule):
     """
@@ -81,8 +83,10 @@ class TEMGenLightningModule(pl.LightningModule):
         z_TEM_proj  = out["z_TEM_proj"]    # (B, 128)
         z_cell_proj = out["z_cell_proj"]   # (B, 128)
 
-        # ── Retrieval accuracy (top-1, top-5) ─────────────────────────────────
-        top1, top5 = self._retrieval_accuracy(z_TEM_proj, z_cell_proj)
+        # ── Retrieval accuracy (top-1, top-5) on gathered embeddings ─────────
+        z_TEM_gathered  = InfoNCELoss._gather(z_TEM_proj)
+        z_cell_gathered = InfoNCELoss._gather(z_cell_proj)
+        top1, top5 = self._retrieval_accuracy(z_TEM_gathered, z_cell_gathered)
 
         # ── Logging ───────────────────────────────────────────────────────────
         self.log(f"{stage}/loss",             loss,  on_step=(stage=="train"),

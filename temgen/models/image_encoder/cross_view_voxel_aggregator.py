@@ -149,10 +149,11 @@ class CrossViewVoxelAggregator(nn.Module):
         d_ff = 4 * d_model
         d_pos = 3 * (1 + 2 * K)                      # 63 at K=10
 
-        assert d_pos == self.D_POS, f"d_pos mismatch: {d_pos} vs {self.D_POS}"
+        self.D_POS = d_pos
 
         self.d_model = d_model
         self.n_heads = n_heads
+        self.K = K
 
         # ── Voxel coordinate grid (static buffer) ─────────────────────────────
         # q_z range: ±sin(7°) ≈ ±0.122  (physical max from y-axis tilt)

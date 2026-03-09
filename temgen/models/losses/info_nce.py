@@ -24,6 +24,7 @@ Spec reference:
 from __future__ import annotations
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -35,6 +36,11 @@ class InfoNCELoss(nn.Module):
     Learns a log-temperature scalar that is optimised jointly with the
     encoders.  Temperature is clamped to [tau_min, tau_max] after exp
     to keep training stable.
+
+    In multi-GPU DDP, embeddings are gathered across all ranks before
+    computing the similarity matrix so that every sample in the global
+    batch acts as a negative.  Gradients flow only through the local
+    rank's embeddings.
 
     Args:
         log_temp_init : initial value of log(τ).
@@ -61,6 +67,29 @@ class InfoNCELoss(nn.Module):
         return self.log_temp.exp().clamp(self.tau_min, self.tau_max).detach()
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _gather(z: torch.Tensor) -> torch.Tensor:
+        """
+        Gather embeddings from all GPUs. Returns (world_size * B, D).
+
+        The local rank's slice keeps its gradient; other ranks' slices
+        are detached so gradients only flow through the local shard.
+        """
+        if not (dist.is_available() and dist.is_initialized()):
+            return z
+
+        world_size = dist.get_world_size()
+        if world_size <= 1:
+            return z
+
+        gathered = [torch.zeros_like(z) for _ in range(world_size)]
+        dist.all_gather(gathered, z)
+
+        # Splice local tensor back in to preserve gradient flow
+        gathered[dist.get_rank()] = z
+        return torch.cat(gathered, dim=0)
+
+    # ------------------------------------------------------------------
     def forward(
         self,
         z_tem: torch.Tensor,
@@ -70,8 +99,8 @@ class InfoNCELoss(nn.Module):
         Compute symmetric InfoNCE loss.
 
         Args:
-            z_tem  : (B, D)  projected TEM embeddings (raw, not yet normalised).
-            z_cell : (B, D)  projected structure embeddings (raw, not yet normalised).
+            z_tem  : (B_local, D)  projected TEM embeddings (raw, not yet normalised).
+            z_cell : (B_local, D)  projected structure embeddings (raw, not yet normalised).
 
         Returns:
             dict with keys:
@@ -79,11 +108,15 @@ class InfoNCELoss(nn.Module):
                 tau   — scalar, current temperature (detached)
                 acc   — scalar, in-batch top-1 matching accuracy
         """
-        B = z_tem.shape[0]
-
         # L2-normalise ------------------------------------------------
         z_tem  = F.normalize(z_tem,  dim=-1)
         z_cell = F.normalize(z_cell, dim=-1)
+
+        # Gather across GPUs for full-batch negatives ------------------
+        z_tem  = self._gather(z_tem)     # (B_global, D)
+        z_cell = self._gather(z_cell)    # (B_global, D)
+
+        B = z_tem.shape[0]
 
         # Temperature --------------------------------------------------
         tau = self.log_temp.exp().clamp(self.tau_min, self.tau_max)
