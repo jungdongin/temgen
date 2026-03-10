@@ -6,15 +6,15 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=64G
-#SBATCH --time=10:00:00
+#SBATCH --mem=128G
+#SBATCH --time=24:00:00
 #SBATCH -o /pscratch/sd/d/dongin/temgen/logs/slurm/build_hdf5_%j.out
 #SBATCH -e /pscratch/sd/d/dongin/temgen/logs/slurm/build_hdf5_%j.err
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 TEMGEN_DIR="/pscratch/sd/d/dongin/temgen"
-SCRIPT="$TEMGEN_DIR/temgen/data/build_hdf5.py"
-DATE_TAG="20260304"       # ← update this when rebuilding with new data
+SCRIPT="$TEMGEN_DIR/scripts/build_hdf5.py"
+DATE_TAG="20260310"       # ← update this when rebuilding with new data
 
 # ─── Environment ──────────────────────────────────────────────────────────────
 module load conda
@@ -34,7 +34,7 @@ echo "========================================"
 # ─── Build train.h5 ───────────────────────────────────────────────────────────
 echo ""
 echo ">>> Building train_${DATE_TAG}.h5"
-python "$SCRIPT" --split train --date "$DATE_TAG"
+python "$SCRIPT" --split train --date "$DATE_TAG" --resume
 
 TRAIN_EXIT=$?
 if [ $TRAIN_EXIT -ne 0 ]; then
@@ -45,7 +45,7 @@ fi
 # ─── Build test.h5 ────────────────────────────────────────────────────────────
 echo ""
 echo ">>> Building test_${DATE_TAG}.h5"
-python "$SCRIPT" --split test --date "$DATE_TAG"
+python "$SCRIPT" --split test --date "$DATE_TAG" --resume
 
 TEST_EXIT=$?
 if [ $TEST_EXIT -ne 0 ]; then

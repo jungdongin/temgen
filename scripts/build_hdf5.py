@@ -17,10 +17,10 @@ train_YYYYMMDD.h5 / test_YYYYMMDD.h5
 
 Usage
 -----
-    # Build train set (13k + 2502)
-    python build_hdf5.py --split train 
+    # Build train set (26k + 26k_var = 52k)
+    python build_hdf5.py --split train
 
-    # Build test set (252)
+    # Build test set (2502)
     python build_hdf5.py --split test
 
     # Dry run (process only first 10 samples)
@@ -59,32 +59,39 @@ log = logging.getLogger(__name__)
 BASE_CFS    = Path("/global/cfs/cdirs/m1090/dongin")
 BASE_PSCRATCH = Path("/pscratch/sd/d/dongin/temgen")
 
-DATA_13K    = BASE_CFS / "cuau_fcc_101010_data"
+DATA_26K    = BASE_CFS / "cuau_fcc_101010_data"
+DATA_VAR    = BASE_CFS / "cuau_fcc_101010_data_var"
 DATA_2502   = BASE_CFS / "cuau_fcc_101010_data_2502"
-DATA_252    = BASE_CFS / "cuau_fcc_101010_data_252"
 
 HDF5_DIR    = BASE_PSCRATCH / "data" / "hdf5"
 
 # ─── Dataset definitions ──────────────────────────────────────────────────────
 # Each entry: (root_dir, list_of_5digit_ids)
-# Train = 13k (00001–13000) + 2502 (00001–02502, same root naming after fix)
-# Test  = 252  (00001–00252)
+# Train = 26k (00001–26000) + 26k_var (00001–26000) = 52k total
+# Test  = 2502 (00001–02502)
 
-def get_sample_list(split: str) -> List[Tuple[Path, str]]:
+def get_sample_list(split: str) -> List[Tuple[Path, str, str]]:
     """
-    Returns list of (root_dir, id5_string) for every sample in the split.
-    Train: 13k set first (ids 00001–13000), then 2502 set (ids 00001–02502).
-    Test : 252 set (ids 00001–00252).
+    Returns list of (root_dir, id5_string, file_prefix) for every sample.
+    Train: 26k set (ids 00001–26000), then 26k_var set (ids 00001–26000).
+    Test : 2502 set (ids 00001–02502).
+
+    file_prefix is the stem used in filenames:
+      - original: "{id5}"          → 00001_dp_convAngle_2, 00001_structure_roi.cif, …
+      - var:      "{id5}_var"      → 00001_var_dp_convAngle_2, 00001_var_structure_roi.cif, …
     """
     samples = []
     if split == "train":
-        for i in range(1, 13001):
-            samples.append((DATA_13K, f"{i:05d}"))
-        for i in range(1, 2503):
-            samples.append((DATA_2502, f"{i:05d}"))
+        for i in range(1, 26001):
+            sid = f"{i:05d}"
+            samples.append((DATA_26K, sid, sid))
+        for i in range(1, 26001):
+            sid = f"{i:05d}"
+            samples.append((DATA_VAR, sid, f"{sid}_var"))
     elif split == "test":
-        for i in range(1, 253):
-            samples.append((DATA_252, f"{i:05d}"))
+        for i in range(1, 2503):
+            sid = f"{i:05d}"
+            samples.append((DATA_2502, sid, sid))
     else:
         raise ValueError(f"Unknown split: {split}")
     return samples
@@ -92,9 +99,14 @@ def get_sample_list(split: str) -> List[Tuple[Path, str]]:
 
 # ─── Per-sample reader ────────────────────────────────────────────────────────
 
-def read_sample(root: Path, sid: str) -> dict | None:
+def read_sample(root: Path, sid: str, prefix: str) -> dict | None:
     """
     Read one sample from disk. Returns None if any file is missing.
+
+    Args:
+        root:   dataset root directory (e.g. DATA_26K or DATA_VAR)
+        sid:    5-digit sample id used for the subdirectory name (e.g. "00001")
+        prefix: filename stem — same as sid for originals, "{sid}_var" for variants
 
     Returns dict with keys:
         dp          np.float16  (15, 409, 409)
@@ -109,7 +121,7 @@ def read_sample(root: Path, sid: str) -> dict | None:
     sample_dir = root / sid
 
     # ── Diffraction patterns ─────────────────────────────────────────────────
-    zarr_path = sample_dir / f"{sid}_dp_convAngle_2" / "dp"
+    zarr_path = sample_dir / f"{prefix}_dp_convAngle_2" / "dp"
     if not zarr_path.exists():
         log.warning(f"Missing zarr: {zarr_path}")
         return None
@@ -127,7 +139,7 @@ def read_sample(root: Path, sid: str) -> dict | None:
     dp   = ((dp - mins) / (maxs - mins + 1e-8)).astype(np.float16)
 
     # ── ROI structure ─────────────────────────────────────────────────────────
-    cif_path = sample_dir / f"{sid}_structure_roi.cif"
+    cif_path = sample_dir / f"{prefix}_structure_roi.cif"
     if not cif_path.exists():
         log.warning(f"Missing CIF: {cif_path}")
         return None
@@ -143,7 +155,7 @@ def read_sample(root: Path, sid: str) -> dict | None:
     angles      = np.array(struct.lattice.angles, dtype=np.float32)       # (3,)
 
     # ── Meta ──────────────────────────────────────────────────────────────────
-    meta_path = sample_dir / f"{sid}_meta.json"
+    meta_path = sample_dir / f"{prefix}_meta.json"
     a_frac = float("nan")
     if meta_path.exists():
         try:
@@ -199,8 +211,8 @@ def build_hdf5(split: str, date_str: str, dry_run: bool, resume: bool) -> None:
         num_atoms_arr = np.zeros(N, dtype=np.int32)
         valid_mask    = np.ones(N,  dtype=bool)
 
-        for i, (root, sid) in enumerate(tqdm(samples, desc="Pass1-CIF")):
-            cif_path = root / sid / f"{sid}_structure_roi.cif"
+        for i, (root, sid, prefix) in enumerate(tqdm(samples, desc="Pass1-CIF")):
+            cif_path = root / sid / f"{prefix}_structure_roi.cif"
             if not cif_path.exists():
                 log.warning(f"[{i}] Missing CIF: {cif_path}")
                 valid_mask[i] = False
@@ -267,7 +279,7 @@ def build_hdf5(split: str, date_str: str, dry_run: bool, resume: bool) -> None:
         atom_offsets = f["atom_offsets"][:]
 
         for i in tqdm(range(start_idx, N), desc="Pass2-write", initial=start_idx, total=N):
-            root, sid = samples[i]
+            root, sid, prefix = samples[i]
 
             if not valid_mask[i]:
                 # fill with zeros / empty so indices stay aligned
@@ -279,7 +291,7 @@ def build_hdf5(split: str, date_str: str, dry_run: bool, resume: bool) -> None:
                 f["sample_ids"][i] = "00000"
                 continue
 
-            sample = read_sample(root, sid)
+            sample = read_sample(root, sid, prefix)
             if sample is None:
                 log.warning(f"read_sample returned None for {sid}, skipping")
                 f["num_atoms"][i] = 0
@@ -323,8 +335,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--split",   choices=["train", "test"], required=True)
-    parser.add_argument("--date",    default="20260304",
-                        help="Date tag for output filename, e.g. 20260304")
+    parser.add_argument("--date",    default="20260310",
+                        help="Date tag for output filename, e.g. 20260310")
     parser.add_argument("--dry-run", action="store_true",
                         help="Process first 10 samples only")
     parser.add_argument("--resume",  action="store_true",
