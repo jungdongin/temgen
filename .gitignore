@@ -18,6 +18,7 @@ data/raw/
 logs/
 checkpoints/
 analysis/
+plots/
 *.ckpt
 wandb/
 
