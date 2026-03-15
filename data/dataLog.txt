@@ -1,2 +1,4 @@
 HDF5 Data log
 # 20260304: cuau_101010_13000 + cuau_101010_2502 for training, cuau_101010_252 for testing
+# 20260310: cuau_101010 26K + cuau_101010_var 26K for training/validating, cuau_101010_2502 for testing
+# 20260312: cuau_101010 30K + cuau_101010_var 30K for training/validating, cuau_101010_2502 for testing

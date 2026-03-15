@@ -4,28 +4,29 @@ cnn_frontend.py
 CNN Frontend for the TEMGen image encoder.
 
 Takes a batch of multi-tilt TEM diffraction patterns and extracts
-per-patch content tokens for each tilt.
+per-patch content tokens for each tilt. Accepts any square input size
+(default 256×256, downsampled from 409×409 in the dataset).
 
 Architecture (from CuAu 101010 Encoding Manual, Section A2):
     - ResNet-18 backbone, conv1 modified for 1-channel grayscale input
     - Layers 1-4 only (no avgpool, no fc)
-    - All 15 tilts processed together as (15B, 1, 409, 409)
-    - Spatial features flattened to 169 patch tokens per tilt
+    - All 15 tilts processed together as (15B, 1, H, W)
+    - Spatial features flattened to P = h×w patch tokens per tilt
     - Linear projection 512 → 256, followed by LayerNorm(256)
 
-Shape flow:
-    Input  : (B, 15, 1, 409, 409)
-    Reshape: (15B, 1, 409, 409)
-    conv1  : (15B, 64, 205, 205)
-    maxpool: (15B, 64, 103, 103)
-    layer1 : (15B, 64, 103, 103)
-    layer2 : (15B, 128, 52, 52)
-    layer3 : (15B, 256, 26, 26)
-    layer4 : (15B, 512, 13, 13)
-    flatten: (15B, 169, 512)
-    proj   : (15B, 169, 256)
-    norm   : (15B, 169, 256)
-    reshape: (B, 15, 169, 256)  ← t_cont
+Shape flow (example with 256×256 input):
+    Input  : (B, 15, 1, 256, 256)
+    Reshape: (15B, 1, 256, 256)
+    conv1  : (15B, 64, 128, 128)
+    maxpool: (15B, 64, 64, 64)
+    layer1 : (15B, 64, 64, 64)
+    layer2 : (15B, 128, 32, 32)
+    layer3 : (15B, 256, 16, 16)
+    layer4 : (15B, 512, 8, 8)
+    flatten: (15B, 64, 512)       P = 8×8 = 64
+    proj   : (15B, 64, 256)
+    norm   : (15B, 64, 256)
+    reshape: (B, 15, 64, 256)    ← t_cont
 """
 
 from __future__ import annotations
@@ -46,13 +47,8 @@ class CNNFrontend(nn.Module):
                       conv1 weights are averaged over the 3 input channels)
     """
 
-    # Fixed architectural constants from the spec
+    # Fixed architectural constants
     T  : int = 15    # number of tilts
-    H  : int = 409   # input height
-    W  : int = 409   # input width
-    h  : int = 13    # spatial grid height after layer4
-    w  : int = 13    # spatial grid width  after layer4
-    P  : int = 169   # h * w = number of patch tokens per tilt
     C  : int = 512   # ResNet-18 layer4 output channels
     D  : int = 256   # projected token dimension
 
@@ -111,38 +107,37 @@ class CNNFrontend(nn.Module):
 
         Returns:
             t_cont : (B, T, P, D)  float32  — content tokens
-                     where T=15, P=169, D=256
+                     where T=15, P=h*w (dynamic), D=256
         """
         B, T, C_in, H, W = x.shape
         assert T    == self.T,  f"Expected T={self.T}, got {T}"
         assert C_in == 1,       f"Expected 1-channel input, got {C_in}"
-        assert H    == self.H,  f"Expected H={self.H}, got {H}"
-        assert W    == self.W,  f"Expected W={self.W}, got {W}"
 
         # ── Merge batch and tilt dims for parallel CNN processing ─────────────
-        x = x.view(B * T, 1, H, W)                     # (15B, 1, 409, 409)
+        x = x.view(B * T, 1, H, W)                     # (15B, 1, H, W)
 
         # ── ResNet-18 feature extraction ──────────────────────────────────────
-        x = self.conv1(x)                               # (15B, 64, 205, 205)
+        x = self.conv1(x)                               # (15B, 64, H//2, W//2)
         x = self.bn1(x)
         x = self.relu(x)
-        x = self.maxpool(x)                             # (15B, 64, 103, 103)
+        x = self.maxpool(x)                             # (15B, 64, h, w)
 
-        x = self.layer1(x)                              # (15B, 64, 103, 103)
-        x = self.layer2(x)                              # (15B, 128, 52, 52)
-        x = self.layer3(x)                              # (15B, 256, 26, 26)
-        x = self.layer4(x)                              # (15B, 512, 13, 13)
+        x = self.layer1(x)                              # (15B, 64,  h, w)
+        x = self.layer2(x)                              # (15B, 128, h/2, w/2)
+        x = self.layer3(x)                              # (15B, 256, h/4, w/4)
+        x = self.layer4(x)                              # (15B, 512, h/8, w/8)
 
         # ── Flatten spatial dims → patch tokens ───────────────────────────────
-        x = x.flatten(2)                                # (15B, 512, 169)
-        x = x.permute(0, 2, 1)                         # (15B, 169, 512)
+        P = x.shape[2] * x.shape[3]                     # dynamic patch count
+        x = x.flatten(2)                                # (15B, 512, P)
+        x = x.permute(0, 2, 1)                         # (15B, P, 512)
 
         # ── Project + normalise ───────────────────────────────────────────────
-        x = self.proj(x)                                # (15B, 169, 256)
-        x = self.norm(x)                                # (15B, 169, 256)
+        x = self.proj(x)                                # (15B, P, 256)
+        x = self.norm(x)                                # (15B, P, 256)
 
         # ── Restore tilt dimension ────────────────────────────────────────────
-        t_cont = x.view(B, T, self.P, self.D)          # (B, 15, 169, 256)
+        t_cont = x.view(B, T, P, self.D)               # (B, 15, P, 256)
 
         return t_cont
 
@@ -152,7 +147,7 @@ class CNNFrontend(nn.Module):
             f"CNNFrontend(\n"
             f"  backbone=ResNet-18 (1-ch conv1)\n"
             f"  proj=Linear({self.C} → {self.D}) + LayerNorm({self.D})\n"
-            f"  output=(B, T={self.T}, P={self.P}, D={self.D})\n"
+            f"  output=(B, T={self.T}, P=dynamic, D={self.D})\n"
             f"  params={n_params:,}\n"
             f")"
         )

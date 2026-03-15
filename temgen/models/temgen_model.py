@@ -150,6 +150,7 @@ class TEMGenModel(nn.Module):
             log_temp_init = c_cfg.log_temp_init,
             tau_min       = c_cfg.temp_min,
             tau_max       = c_cfg.temp_max,
+            fixed_temp    = c_cfg.get("fixed_temp", None),
         )
 
         # Store method for forward routing

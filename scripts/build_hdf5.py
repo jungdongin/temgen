@@ -17,7 +17,7 @@ train_YYYYMMDD.h5 / test_YYYYMMDD.h5
 
 Usage
 -----
-    # Build train set (26k + 26k_var = 52k)
+    # Build train set (30k + 30k_var = 70k)
     python build_hdf5.py --split train
 
     # Build test set (2502)
@@ -59,7 +59,7 @@ log = logging.getLogger(__name__)
 BASE_CFS    = Path("/global/cfs/cdirs/m1090/dongin")
 BASE_PSCRATCH = Path("/pscratch/sd/d/dongin/temgen")
 
-DATA_26K    = BASE_CFS / "cuau_fcc_101010_data"
+DATA_30K    = BASE_CFS / "cuau_fcc_101010_data"
 DATA_VAR    = BASE_CFS / "cuau_fcc_101010_data_var"
 DATA_2502   = BASE_CFS / "cuau_fcc_101010_data_2502"
 
@@ -67,13 +67,13 @@ HDF5_DIR    = BASE_PSCRATCH / "data" / "hdf5"
 
 # ─── Dataset definitions ──────────────────────────────────────────────────────
 # Each entry: (root_dir, list_of_5digit_ids)
-# Train = 26k (00001–26000) + 26k_var (00001–26000) = 52k total
+# Train = 30k (00001–30000) + 30k_var (00001–30000) = 70k total
 # Test  = 2502 (00001–02502)
 
 def get_sample_list(split: str) -> List[Tuple[Path, str, str]]:
     """
     Returns list of (root_dir, id5_string, file_prefix) for every sample.
-    Train: 26k set (ids 00001–26000), then 26k_var set (ids 00001–26000).
+    Train: 30k set (ids 00001–30000), then 30k_var set (ids 00001–30000).
     Test : 2502 set (ids 00001–02502).
 
     file_prefix is the stem used in filenames:
@@ -82,10 +82,10 @@ def get_sample_list(split: str) -> List[Tuple[Path, str, str]]:
     """
     samples = []
     if split == "train":
-        for i in range(1, 26001):
+        for i in range(1, 30001):
             sid = f"{i:05d}"
-            samples.append((DATA_26K, sid, sid))
-        for i in range(1, 26001):
+            samples.append((DATA_30K, sid, sid))
+        for i in range(1, 30001):
             sid = f"{i:05d}"
             samples.append((DATA_VAR, sid, f"{sid}_var"))
     elif split == "test":
@@ -104,7 +104,7 @@ def read_sample(root: Path, sid: str, prefix: str) -> dict | None:
     Read one sample from disk. Returns None if any file is missing.
 
     Args:
-        root:   dataset root directory (e.g. DATA_26K or DATA_VAR)
+        root:   dataset root directory (e.g. DATA_30K or DATA_VAR)
         sid:    5-digit sample id used for the subdirectory name (e.g. "00001")
         prefix: filename stem — same as sid for originals, "{sid}_var" for variants
 
@@ -335,8 +335,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--split",   choices=["train", "test"], required=True)
-    parser.add_argument("--date",    default="20260310",
-                        help="Date tag for output filename, e.g. 20260310")
+    parser.add_argument("--date",    default="20300312",
+                        help="Date tag for output filename, e.g. 20300312")
     parser.add_argument("--dry-run", action="store_true",
                         help="Process first 10 samples only")
     parser.add_argument("--resume",  action="store_true",

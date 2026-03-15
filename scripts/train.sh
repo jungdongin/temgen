@@ -26,14 +26,14 @@
 
 #SBATCH --job-name=temgen_train
 #SBATCH --account=m3828
-#SBATCH --qos=preempt
+#SBATCH --qos=regular
 #SBATCH --constraint=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
-#SBATCH --time=8:00:00
+#SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --signal=SIGUSR1@120
 #SBATCH -o /pscratch/sd/d/dongin/temgen/logs/slurm/train_%j.out
@@ -42,7 +42,7 @@
 # ─── Config ───────────────────────────────────────────────────────────────────
 TEMGEN_DIR="/pscratch/sd/d/dongin/temgen"
 CONFIG="${1:-$TEMGEN_DIR/configs/cuau_101010_3.yaml}"
-CKPT_DIR="$TEMGEN_DIR/checkpoints/$SLURM_JOB_ID"
+CKPT_DIR="${PREV_CKPT_DIR:-$TEMGEN_DIR/checkpoints/$SLURM_JOB_ID}"
 LOG_DIR="$TEMGEN_DIR/logs"
 
 # ─── Environment ──────────────────────────────────────────────────────────────
@@ -124,5 +124,17 @@ echo "Exit code     : $EXIT_CODE"
 echo "Checkpoints   :"
 ls -lht "$CKPT_DIR/" 2>/dev/null | head -5
 echo "========================================"
+
+# ─── Auto-resubmit on timeout ───────────────────────────────────────────────
+# If training didn't finish (non-zero exit) and a checkpoint exists,
+# resubmit with the same config so it resumes from last.ckpt.
+# --requeue handles preemption automatically; this handles wall-time timeout.
+if [ $EXIT_CODE -ne 0 ] && [ -f "$CKPT_DIR/last.ckpt" ]; then
+    echo ""
+    echo ">>> Training did not complete (exit=$EXIT_CODE). Auto-resubmitting..."
+    NEW_JOB_ID=$(sbatch --export=ALL,PREV_CKPT_DIR="$CKPT_DIR" \
+        "$TEMGEN_DIR/scripts/train.sh" "$CONFIG" 2>&1 | awk '{print $NF}')
+    echo ">>> Resubmitted as job $NEW_JOB_ID (will resume from $CKPT_DIR/last.ckpt)"
+fi
 
 exit $EXIT_CODE

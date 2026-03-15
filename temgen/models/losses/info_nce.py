@@ -23,6 +23,8 @@ Spec reference:
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -37,6 +39,8 @@ class InfoNCELoss(nn.Module):
     encoders.  Temperature is clamped to [tau_min, tau_max] after exp
     to keep training stable.
 
+    When ``fixed_temp`` is provided, temperature is constant (not learned).
+
     In multi-GPU DDP, embeddings are gathered across all ranks before
     computing the similarity matrix so that every sample in the global
     batch acts as a negative.  Gradients flow only through the local
@@ -47,6 +51,7 @@ class InfoNCELoss(nn.Module):
                         Default 2.6593 = log(1/0.07).
         tau_min       : lower clamp for τ after exp.
         tau_max       : upper clamp for τ after exp.
+        fixed_temp    : if set, use this constant τ (not learned).
     """
 
     def __init__(
@@ -54,9 +59,19 @@ class InfoNCELoss(nn.Module):
         log_temp_init: float = 2.6593,
         tau_min: float = 0.01,
         tau_max: float = 1.0,
+        fixed_temp: float | None = None,
     ) -> None:
         super().__init__()
-        self.log_temp = nn.Parameter(torch.tensor(log_temp_init, dtype=torch.float32))
+        self._fixed_temp = fixed_temp
+        if fixed_temp is not None:
+            # Constant temperature — stored as buffer (not optimised)
+            self.register_buffer(
+                "log_temp",
+                torch.tensor(math.log(fixed_temp), dtype=torch.float32),
+            )
+        else:
+            # Learnable temperature
+            self.log_temp = nn.Parameter(torch.tensor(log_temp_init, dtype=torch.float32))
         self.tau_min = tau_min
         self.tau_max = tau_max
 
@@ -140,9 +155,10 @@ class InfoNCELoss(nn.Module):
         return {"loss": loss, "tau": tau.detach(), "acc": acc}
 
     def __repr__(self) -> str:
+        temp_mode = f"fixed={self._fixed_temp}" if self._fixed_temp is not None else "learnable"
         return (
             f"InfoNCELoss(\n"
-            f"  log_temp_init={self.log_temp.item():.4f}\n"
+            f"  temperature   : {temp_mode}\n"
             f"  tau={self.tau.item():.4f}\n"
             f"  tau_clamp=[{self.tau_min}, {self.tau_max}]\n"
             f")"

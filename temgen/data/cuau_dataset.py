@@ -4,9 +4,10 @@ cuau_dataset.py
 PyTorch Dataset reading from pre-built HDF5 files (train/test).
 
 Each __getitem__ does exactly:
-  1. One HDF5 row read for dp       → (15, 1, 409, 409)
-  2. One HDF5 slice read for struct → frac_coords, atom_types
-  3. A few scalar reads             → lengths, angles, a_frac
+  1. One HDF5 row read for dp       → (15, 1, 409, 409) raw
+  2. Bilinear downsample to image_size → (15, 1, S, S)  default S=256
+  3. One HDF5 slice read for struct → frac_coords, atom_types
+  4. A few scalar reads             → lengths, angles, a_frac
 
 No zarr, no CIF parsing at training time.
 
@@ -26,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 import h5py
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -59,12 +61,16 @@ class CuAuHDF5Dataset(Dataset):
         self,
         h5_path: str | Path,
         indices: Optional[List[int]] = None,
+        image_size: int = 256,
     ):
         """
         Args:
-            h5_path : path to .h5 file
-            indices : optional subset of sample indices (for train/val split)
+            h5_path    : path to .h5 file
+            indices    : optional subset of sample indices (for train/val split)
+            image_size : resize DP images to (image_size, image_size). Default 256.
+                         Set to 409 to skip resizing (original resolution).
         """
+        self.image_size = image_size
         self.h5_path = Path(h5_path)
         assert self.h5_path.exists(), f"HDF5 not found: {self.h5_path}"
 
@@ -101,6 +107,13 @@ class CuAuHDF5Dataset(Dataset):
             self._h5["dp"][i].astype(np.float32)
         ).unsqueeze(1)                                    # (15, 1, 409, 409)
 
+        # Downsample if needed
+        if self.image_size != dp.shape[-1]:
+            dp = F.interpolate(
+                dp, size=(self.image_size, self.image_size),
+                mode="bilinear", align_corners=False,
+            )                                             # (15, 1, S, S)
+
         # ── Structure ─────────────────────────────────────────────────────────
         s = int(self._atom_offsets[i])
         e = int(self._atom_offsets[i + 1])
@@ -116,7 +129,7 @@ class CuAuHDF5Dataset(Dataset):
         angles  = torch.from_numpy(self._h5["angles"][i])    # (3,)
 
         return dict(
-            dp          = dp,                               # (15, 1, 409, 409) float32
+            dp          = dp,                               # (15, 1, S, S) float32
             alpha       = TILT_ANGLES_RAD.clone(),          # (15,) float32
             frac_coords = frac_coords,                      # (N_i, 3)  float32
             atom_types  = atom_types,                       # (N_i,)    int64
@@ -145,7 +158,7 @@ def cuau_collate_fn(batch: List[dict]) -> dict:
     — the GNN graph builder handles batching these.
     """
     return dict(
-        dp          = torch.stack([b["dp"]     for b in batch]),   # (B,15,1,409,409)
+        dp          = torch.stack([b["dp"]     for b in batch]),   # (B,15,1,S,S)
         alpha       = torch.stack([b["alpha"]  for b in batch]),   # (B,15)
         lengths     = torch.stack([b["lengths"]for b in batch]),   # (B,3)
         angles      = torch.stack([b["angles"] for b in batch]),   # (B,3)
@@ -167,6 +180,7 @@ def build_dataloaders(
     batch_size    : int   = 256,
     num_workers   : int   = 8,
     pin_memory    : bool  = True,
+    image_size    : int   = 256,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Build train / val / test DataLoaders from HDF5 files.
@@ -186,9 +200,9 @@ def build_dataloaders(
     n_val    = int(N * val_fraction)
     n_train  = N - n_val
 
-    train_ds = CuAuHDF5Dataset(train_h5, indices=perm[:n_train])
-    val_ds   = CuAuHDF5Dataset(train_h5, indices=perm[n_train:])
-    test_ds  = CuAuHDF5Dataset(test_h5)
+    train_ds = CuAuHDF5Dataset(train_h5, indices=perm[:n_train], image_size=image_size)
+    val_ds   = CuAuHDF5Dataset(train_h5, indices=perm[n_train:], image_size=image_size)
+    test_ds  = CuAuHDF5Dataset(test_h5, image_size=image_size)
 
     loader_kwargs = dict(
         batch_size       = batch_size,

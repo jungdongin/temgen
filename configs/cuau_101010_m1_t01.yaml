@@ -1,16 +1,16 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# cuau_101010.yaml
+# cuau_101010_m1_t01.yaml
 #
-# Full configuration for TEMGen contrastive learning on CuAu FCC 10×10×10.
-# All numbers come from the CuAu 101010 Encoding Manual (Notion spec).
+# Method 1 — fixed τ = 0.1 — batch size 256
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 data:
-  train_h5: data/hdf5/train_20260304.h5
-  test_h5:  data/hdf5/test_20260304.h5
+  train_h5: data/hdf5/train_20260312.h5
+  test_h5:  data/hdf5/test_20260312.h5
   val_fraction: 0.1
   val_seed: 42
+  image_size: 256             # resize DP from 409→256 (saves GPU memory)
   num_workers: 8
 
 # ── Image encoder ─────────────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ image_encoder:
   pretrained_cnn: false      # ImageNet pretrained ResNet-18 init
 
   # Aggregator selection: 1 = Perceiver, 2 = Geometry-Aware, 3 = Voxel
-  aggregator_method: 2
+  aggregator_method: 1
 
   # Method 1 & 2: Perceiver
   n_latents: 32              # latent tokens
@@ -52,9 +52,10 @@ graph:
 
 # ── Contrastive loss ──────────────────────────────────────────────────────────
 contrastive:
-  log_temp_init: -2.6593     # log(0.07) ≈ -2.6593  →  τ_init = 0.07
+  log_temp_init: -2.6593     # log(0.07) ≈ -2.6593  (unused when fixed_temp is set)
   temp_min: 0.01             # lower clamp for τ
   temp_max: 1.0              # upper clamp for τ
+  fixed_temp: 0.1            # fixed temperature (not learned)
 
 # ── Training ──────────────────────────────────────────────────────────────────
 training:
@@ -64,9 +65,8 @@ training:
   betas: [0.9, 0.999]
   eps: 1.0e-8
   warmup_epochs: 10
-  epochs: 300
-  batch_size: 32            # per-GPU batch size (effective = 32 × 4 GPUs = 128)
-                            # InfoNCE gathers all 128 embeddings across GPUs
+  epochs: 500
+  batch_size: 64            # per-GPU batch size (effective = 64 × 4 GPUs = 256)
   accumulate_grad_batches: 1
   grad_clip_norm: 1.0
   eval_every_n_epochs: 5     # full-set retrieval eval on test set

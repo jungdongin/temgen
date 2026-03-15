@@ -65,6 +65,7 @@ def main():
         batch_size   = cfg.training.batch_size,
         num_workers  = d_cfg.num_workers,
         pin_memory   = True,
+        image_size   = d_cfg.get("image_size", 256),
     )
 
     # ── Model ─────────────────────────────────────────────────────────────────

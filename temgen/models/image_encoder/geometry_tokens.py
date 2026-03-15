@@ -8,21 +8,21 @@ and produces three additive embeddings:
 
     t_geo : (B, T, P, D)  — geometry-aware feature (reciprocal coords + Fourier)
     t_ang : (B, T, P, D)  — per-tilt angle embedding (broadcast over patches)
-    Z     : (B, M, D)     — assembled token sequence, M = T*P = 2535
+    Z     : (B, M, D)     — assembled token sequence, M = T*P
     q_coords : (B, M, 3)  — 3D reciprocal-space coords for each token (for Method 2)
 
 Implements Sections A3–A7 of the CuAu 101010 Encoding Manual:
 
-    A3. 2D reciprocal grid        — static (B, register_buffer)
+    A3. 2D reciprocal grid        — built lazily on first forward pass
     A4. 3D y-axis rotation        — alpha-dependent, computed per forward pass
     A5. Geometry feature vector   — 5 raw + 5×20 Fourier = 105 dim → Linear → 256
     A6. Angle embedding           — 20 Fourier bands → Linear → 256
     A7. Token assembly            — t_cont + t_geo + t_ang → view(B, M, D)
 
-Key constants (fixed by dataset/spec):
+Key constants:
     T  = 15     tilts
-    P  = 169    patches per tilt  (13×13)
-    M  = 2535   total tokens      (T × P)
+    P  = dynamic  patches per tilt (e.g. 64 for 256×256 input, 169 for 409×409)
+    M  = T*P    total tokens
     D  = 256    token dimension
     K  = 10     Fourier bands
     d_geo = 105   geometry feature dim  (5 raw + 5 × 2K)
@@ -72,7 +72,7 @@ class GeometryTokens(nn.Module):
         alpha    : (B, T)         tilt angles in radians
 
     Produces:
-        Z        : (B, M, D)      assembled token sequence  (M = T*P = 2535)
+        Z        : (B, M, D)      assembled token sequence  (M = T*P, dynamic)
         q_coords : (B, M, 3)      3D reciprocal coords per token (for Method 2/3)
 
     Args:
@@ -80,12 +80,8 @@ class GeometryTokens(nn.Module):
         K        : Fourier frequency bands (default 10, fixed by spec)
     """
 
-    # Fixed constants from spec
+    # Fixed constants
     T : int = 15      # tilts
-    h : int = 13      # spatial grid height
-    w : int = 13      # spatial grid width
-    P : int = 169     # h * w
-    M : int = 2535    # T * P
     D : int = 256     # token dimension
     K : int = 10      # Fourier bands
 
@@ -99,19 +95,15 @@ class GeometryTokens(nn.Module):
         assert d_model == self.D, (
             f"d_model must be {self.D} to match the image encoder spec."
         )
-        assert K == self.K, (
-            f"K must be {self.K} to match the image encoder spec."
-        )
 
+        self._K = K
         d_geo = 5 + 5 * 2 * K    # 105
         d_ang = 2 * K             # 20
 
-        # ── A3: 2D reciprocal grid (static, registered as buffers) ────────────
-        u = torch.linspace(-1, 1, self.h)                    # (13,)
-        v = torch.linspace(-1, 1, self.w)                    # (13,)
-        grid_u, grid_v = torch.meshgrid(u, v, indexing="ij") # (13, 13) each
-        self.register_buffer("q_tilde_x", grid_u.flatten())  # (169,)
-        self.register_buffer("q_tilde_y", grid_v.flatten())  # (169,)
+        # ── A3: 2D reciprocal grid — built lazily on first forward pass ───────
+        # Grid size depends on input image resolution (8×8 for 256, 13×13 for 409)
+        self._grid_h: int | None = None
+        self._grid_w: int | None = None
 
         # ── A5: Geometry projection ───────────────────────────────────────────
         # f_geo: ℝ^105 → ℝ^256
@@ -125,9 +117,23 @@ class GeometryTokens(nn.Module):
         # f_ang: ℝ^20 → ℝ^256
         self.f_ang = nn.Linear(d_ang, d_model)
 
+    def _ensure_grid(self, P: int, device: torch.device) -> None:
+        """Build or rebuild the 2D reciprocal grid if patch count changed."""
+        h = w = int(math.sqrt(P))
+        assert h * w == P, f"Patch count {P} is not a perfect square"
+        if self._grid_h == h and self._grid_w == w:
+            return  # already built
+        self._grid_h = h
+        self._grid_w = w
+        u = torch.linspace(-1, 1, h, device=device)
+        v = torch.linspace(-1, 1, w, device=device)
+        grid_u, grid_v = torch.meshgrid(u, v, indexing="ij")
+        self.register_buffer("q_tilde_x", grid_u.flatten())
+        self.register_buffer("q_tilde_y", grid_v.flatten())
+
     # ── A4: y-axis 3D rotation ────────────────────────────────────────────────
 
-    def _rotate_y(self, alpha: torch.Tensor) -> torch.Tensor:
+    def _rotate_y(self, alpha: torch.Tensor, P: int) -> torch.Tensor:
         """
         Rotate 2D reciprocal-space coords into 3D via y-axis tilt.
 
@@ -135,6 +141,7 @@ class GeometryTokens(nn.Module):
 
         Args:
             alpha : (B, T)  tilt angles in radians
+            P     : number of patches
 
         Returns:
             q_prime : (B, T, P, 3)  3D reciprocal coords per token
@@ -145,14 +152,14 @@ class GeometryTokens(nn.Module):
         sin_a = torch.sin(alpha).unsqueeze(2)          # (B, T, 1)
 
         # q_tilde buffers: (P,) → (1, 1, P)
-        qx = self.q_tilde_x.unsqueeze(0).unsqueeze(0) # (1, 1, 169)
-        qy = self.q_tilde_y.unsqueeze(0).unsqueeze(0) # (1, 1, 169)
+        qx = self.q_tilde_x.unsqueeze(0).unsqueeze(0) # (1, 1, P)
+        qy = self.q_tilde_y.unsqueeze(0).unsqueeze(0) # (1, 1, P)
 
-        qp_x = qx * cos_a                             # (B, T, 169)
-        qp_y = qy.expand(B, T, self.P)                # (B, T, 169)
-        qp_z = -qx * sin_a                            # (B, T, 169)
+        qp_x = qx * cos_a                             # (B, T, P)
+        qp_y = qy.expand(B, T, P)                     # (B, T, P)
+        qp_z = -qx * sin_a                            # (B, T, P)
 
-        q_prime = torch.stack([qp_x, qp_y, qp_z], dim=-1)  # (B, T, 169, 3)
+        q_prime = torch.stack([qp_x, qp_y, qp_z], dim=-1)  # (B, T, P, 3)
         return q_prime
 
     # ── A5: Geometry feature vector ───────────────────────────────────────────
@@ -174,10 +181,11 @@ class GeometryTokens(nn.Module):
             gamma_geo : (B, T, P, 105)
         """
         B, T = alpha.shape
+        P = q_prime.shape[2]
 
         # Raw 2D coords — broadcast (P,) → (B, T, P)
-        raw_x = self.q_tilde_x.view(1, 1, self.P).expand(B, T, -1)  # (B,T,P)
-        raw_y = self.q_tilde_y.view(1, 1, self.P).expand(B, T, -1)  # (B,T,P)
+        raw_x = self.q_tilde_x.view(1, 1, P).expand(B, T, -1)  # (B,T,P)
+        raw_y = self.q_tilde_y.view(1, 1, P).expand(B, T, -1)  # (B,T,P)
 
         # Rotated 3D coords from q_prime
         raw_qp_x = q_prime[..., 0]                                   # (B,T,P)
@@ -185,11 +193,11 @@ class GeometryTokens(nn.Module):
         raw_qp_z = q_prime[..., 2]                                   # (B,T,P)
 
         # Fourier features: each (B,T,P) → (B,T,P,20)
-        phi_x   = fourier_encode(raw_x,   self.K)
-        phi_y   = fourier_encode(raw_y,   self.K)
-        phi_qpx = fourier_encode(raw_qp_x, self.K)
-        phi_qpy = fourier_encode(raw_qp_y, self.K)
-        phi_qpz = fourier_encode(raw_qp_z, self.K)
+        phi_x   = fourier_encode(raw_x,   self._K)
+        phi_y   = fourier_encode(raw_y,   self._K)
+        phi_qpx = fourier_encode(raw_qp_x, self._K)
+        phi_qpy = fourier_encode(raw_qp_y, self._K)
+        phi_qpz = fourier_encode(raw_qp_z, self._K)
 
         # Assemble γ_geo: 5 raw scalars + 5 × 20 Fourier = 105
         gamma_geo = torch.cat([
@@ -209,7 +217,7 @@ class GeometryTokens(nn.Module):
 
     # ── A6: Angle embedding ───────────────────────────────────────────────────
 
-    def _angle_feature(self, alpha: torch.Tensor) -> torch.Tensor:
+    def _angle_feature(self, alpha: torch.Tensor, P: int) -> torch.Tensor:
         """
         Build γ_α ∈ ℝ^20 for every (b, i) tilt, then project → ℝ^256.
 
@@ -219,13 +227,13 @@ class GeometryTokens(nn.Module):
             t_ang : (B, T, P, D)  broadcast over patches
         """
         # alpha: (B, T) → Fourier encode → (B, T, 20)
-        gamma_ang = fourier_encode(alpha, self.K)   # (B, T, 20)
+        gamma_ang = fourier_encode(alpha, self._K)  # (B, T, 20)
 
         # Project → (B, T, 256)
         t_ang = self.f_ang(gamma_ang)               # (B, T, D)
 
         # Broadcast over patch dimension P
-        t_ang = t_ang.unsqueeze(2).expand(-1, -1, self.P, -1)  # (B, T, P, D)
+        t_ang = t_ang.unsqueeze(2).expand(-1, -1, P, -1)  # (B, T, P, D)
         return t_ang
 
     # ── A7: Forward / token assembly ──────────────────────────────────────────
@@ -239,44 +247,48 @@ class GeometryTokens(nn.Module):
         Assemble geometry-aware token sequence.
 
         Returns:
-            Z        : (B, M, D)   assembled tokens   M = T*P = 2535
+            Z        : (B, M, D)   assembled tokens   M = T*P
             q_coords : (B, M, 3)   3D reciprocal coords (for Geometry-Aware Perceiver)
         """
         B, T, P, D = t_cont.shape
         assert T == self.T, f"Expected T={self.T}, got {T}"
-        assert P == self.P, f"Expected P={self.P}, got {P}"
         assert D == self.D, f"Expected D={self.D}, got {D}"
+        M = T * P
+
+        # Build/rebuild spatial grid if patch count changed
+        self._ensure_grid(P, t_cont.device)
 
         # A4: rotate to 3D
-        q_prime = self._rotate_y(alpha)             # (B, T, P, 3)
+        q_prime = self._rotate_y(alpha, P)           # (B, T, P, 3)
 
         # A5: geometry tokens
         gamma_geo = self._geometry_feature(alpha, q_prime)  # (B, T, P, 105)
         t_geo = self.f_geo(gamma_geo)               # (B, T, P, D)
 
         # A6: angle tokens
-        t_ang = self._angle_feature(alpha)          # (B, T, P, D)
+        t_ang = self._angle_feature(alpha, P)       # (B, T, P, D)
 
         # A7: additive assembly
         t_tilde = t_cont + t_geo + t_ang            # (B, T, P, D)
 
         # Flatten T and P into a single token sequence
-        Z        = t_tilde.view(B, self.M, D)       # (B, 2535, D)
-        q_coords = q_prime.view(B, self.M, 3)       # (B, 2535, 3)
+        Z        = t_tilde.view(B, M, D)            # (B, M, D)
+        q_coords = q_prime.view(B, M, 3)            # (B, M, 3)
 
         return Z, q_coords
 
     def __repr__(self) -> str:
-        d_geo = 5 + 5 * 2 * self.K
-        d_ang = 2 * self.K
+        d_geo = 5 + 5 * 2 * self._K
+        d_ang = 2 * self._K
         n_params = sum(p.numel() for p in self.parameters())
+        grid_str = f"{self._grid_h}×{self._grid_w}" if self._grid_h else "dynamic (built on first forward)"
         return (
             f"GeometryTokens(\n"
-            f"  reciprocal_grid=linspace(-1,1,{self.h}) × linspace(-1,1,{self.w})\n"
-            f"  K={self.K} Fourier bands\n"
+            f"  reciprocal_grid={grid_str}\n"
+            f"  K={self._K} Fourier bands\n"
             f"  f_geo=Linear({d_geo}→{self.D})→GELU→Linear({self.D}→{self.D})\n"
             f"  f_ang=Linear({d_ang}→{self.D})\n"
-            f"  output Z=(B, M={self.M}, D={self.D})\n"
+            f"  output Z=(B, T*P, D={self.D})\n"
             f"  params={n_params:,}\n"
             f")"
         )

@@ -14,9 +14,10 @@ data/raw/
 *.hdf5
 *.zarr/
 
-# ── Logs & checkpoints ───────────────────────────────────────────────────────
+# ── Logs & checkpoints & analysis───────────────────────────────────────────────────────
 logs/
 checkpoints/
+analysis/
 *.ckpt
 wandb/
 
