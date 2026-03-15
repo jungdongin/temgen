@@ -54,24 +54,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .aggregator import CrossAttentionBlock, FeedForward, SelfAttentionBlock
-
-
-# ─── Fourier positional encoding (same as geometry_tokens.py) ─────────────────
-
-def fourier_encode(x: torch.Tensor, K: int = 10) -> torch.Tensor:
-    """
-    φ(x) = [sin(πx), cos(πx), ..., sin(Kπx), cos(Kπx)] ∈ ℝ^(2K)
-
-    Args:
-        x   : (...,)
-        K   : frequency bands
-
-    Returns:
-        enc : (..., 2K)
-    """
-    freqs  = torch.arange(1, K + 1, device=x.device, dtype=x.dtype)
-    angles = x.unsqueeze(-1) * math.pi * freqs       # (..., K)
-    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+from temgen.utils import fourier_encode
 
 
 # ─── Voxel positional encoding ────────────────────────────────────────────────
@@ -139,11 +122,12 @@ class CrossViewVoxelAggregator(nn.Module):
 
     def __init__(
         self,
-        d_model    : int = 256,
-        n_heads    : int = 8,
-        L_blocks   : int = 2,
-        K          : int = 10,
-        d_proj_out : int = 128,
+        d_model    : int   = 256,
+        n_heads    : int   = 8,
+        L_blocks   : int   = 2,
+        K          : int   = 10,
+        d_proj_out : int   = 128,
+        dropout    : float = 0.0,
     ):
         super().__init__()
         d_ff = 4 * d_model
@@ -175,22 +159,23 @@ class CrossViewVoxelAggregator(nn.Module):
         self.blocks = nn.ModuleList()
         for _ in range(L_blocks):
             block = nn.ModuleDict({
-                "cross_attn": CrossAttentionBlock(d_model, n_heads),
-                "cross_ff"  : FeedForward(d_model, d_ff),
-                "self_attn" : SelfAttentionBlock(d_model, n_heads),
-                "self_ff"   : FeedForward(d_model, d_ff),
+                "cross_attn": CrossAttentionBlock(d_model, n_heads, dropout=dropout),
+                "cross_ff"  : FeedForward(d_model, d_ff, dropout=dropout),
+                "self_attn" : SelfAttentionBlock(d_model, n_heads, dropout=dropout),
+                "self_ff"   : FeedForward(d_model, d_ff, dropout=dropout),
             })
             self.blocks.append(block)
 
         # ── Global pooling query ──────────────────────────────────────────────
         self.q_glob     = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-        self.pool_cross = CrossAttentionBlock(d_model, n_heads)
+        self.pool_cross = CrossAttentionBlock(d_model, n_heads, dropout=dropout)
         self.pool_norm  = nn.LayerNorm(d_model)
 
         # ── Projection head (A9) ──────────────────────────────────────────────
         self.img_proj = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(d_model, d_proj_out),
         )
 

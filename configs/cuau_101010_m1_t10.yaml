@@ -35,6 +35,7 @@ image_encoder:
 
   # Method 3 only: Cross-View Voxel Latent
   L_blocks: 2                # cross+self attention blocks
+  dropout: 0.1                 # dropout rate for attention and FFN layers
 
 # ── Structure encoder ─────────────────────────────────────────────────────────
 structure_encoder:

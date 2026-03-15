@@ -86,6 +86,7 @@ class GeometryAwarePerceiverAggregator(nn.Module):
         d_proj_out : int   = 128,
         beta_init  : float = 1.0,
         sigma_init : float = 0.5,
+        dropout    : float = 0.0,
     ):
         super().__init__()
         assert n_latents == self.GRID_X * self.GRID_Y * self.GRID_Z, (
@@ -120,12 +121,12 @@ class GeometryAwarePerceiverAggregator(nn.Module):
         self.cross_blocks = nn.ModuleList()
         for _ in range(L_cross):
             block = nn.ModuleDict({
-                "cross_attn": CrossAttentionBlock(d_model, n_heads),
-                "cross_ff"  : FeedForward(d_model, d_ff),
+                "cross_attn": CrossAttentionBlock(d_model, n_heads, dropout=dropout),
+                "cross_ff"  : FeedForward(d_model, d_ff, dropout=dropout),
                 "self_layers": nn.ModuleList([
                     nn.ModuleDict({
-                        "self_attn": SelfAttentionBlock(d_model, n_heads),
-                        "self_ff"  : FeedForward(d_model, d_ff),
+                        "self_attn": SelfAttentionBlock(d_model, n_heads, dropout=dropout),
+                        "self_ff"  : FeedForward(d_model, d_ff, dropout=dropout),
                     })
                     for _ in range(L_self)
                 ]),
@@ -134,13 +135,14 @@ class GeometryAwarePerceiverAggregator(nn.Module):
 
         # ── Global pooling query ──────────────────────────────────────────────
         self.q_glob     = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-        self.pool_cross = CrossAttentionBlock(d_model, n_heads)
+        self.pool_cross = CrossAttentionBlock(d_model, n_heads, dropout=dropout)
         self.pool_norm  = nn.LayerNorm(d_model)
 
         # ── Projection head (A9) ──────────────────────────────────────────────
         self.img_proj = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(d_model, d_proj_out),
         )
 

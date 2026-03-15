@@ -213,7 +213,7 @@ def build_dataloaders(
         prefetch_factor  = 2 if num_workers > 0 else None,
     )
 
-    train_loader = DataLoader(train_ds, shuffle=True,  **loader_kwargs)
+    train_loader = DataLoader(train_ds, shuffle=True,  drop_last=True, **loader_kwargs)
     val_loader   = DataLoader(val_ds,   shuffle=False, **loader_kwargs)
     test_loader  = DataLoader(test_ds,  shuffle=False, **loader_kwargs)
 

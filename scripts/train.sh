@@ -41,7 +41,7 @@
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 TEMGEN_DIR="/pscratch/sd/d/dongin/temgen"
-CONFIG="${1:-$TEMGEN_DIR/configs/cuau_101010_3.yaml}"
+CONFIG="${1:-$TEMGEN_DIR/configs/cuau_101010_m3_t01.yaml}"
 CKPT_DIR="${PREV_CKPT_DIR:-$TEMGEN_DIR/checkpoints/$SLURM_JOB_ID}"
 LOG_DIR="$TEMGEN_DIR/logs"
 

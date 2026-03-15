@@ -97,6 +97,8 @@ class TEMGenModel(nn.Module):
             f"aggregator_method must be 1, 2, or 3. Got: {method}"
         )
 
+        dropout = ie_cfg.get("dropout", 0.0)
+
         if method == 1:
             self.aggregator = PerceiverAggregator(
                 d_model    = ie_cfg.d_model,
@@ -105,6 +107,7 @@ class TEMGenModel(nn.Module):
                 L_cross    = ie_cfg.L_cross,
                 L_self     = ie_cfg.L_self,
                 d_proj_out = ie_cfg.d_proj,
+                dropout    = dropout,
             )
 
         elif method == 2:
@@ -117,6 +120,7 @@ class TEMGenModel(nn.Module):
                 d_proj_out = ie_cfg.d_proj,
                 beta_init  = ie_cfg.beta_init,
                 sigma_init = ie_cfg.sigma_init,
+                dropout    = dropout,
             )
 
         elif method == 3:
@@ -126,6 +130,7 @@ class TEMGenModel(nn.Module):
                 L_blocks   = ie_cfg.L_blocks,
                 K          = ie_cfg.K_fourier,
                 d_proj_out = ie_cfg.d_proj,
+                dropout    = dropout,
             )
 
         # ── Structure encoder ─────────────────────────────────────────────────
@@ -254,13 +259,15 @@ class TEMGenModel(nn.Module):
         loss_out = self.loss_fn(z_TEM_proj, z_cell_proj)
 
         return dict(
-            z_TEM       = z_TEM,
-            z_cell      = z_cell,
-            z_TEM_proj  = z_TEM_proj,
-            z_cell_proj = z_cell_proj,
-            loss        = loss_out["loss"],
-            tau         = loss_out["tau"],
-            acc         = loss_out["acc"],
+            z_TEM           = z_TEM,
+            z_cell          = z_cell,
+            z_TEM_proj      = z_TEM_proj,
+            z_cell_proj     = z_cell_proj,
+            loss            = loss_out["loss"],
+            tau             = loss_out["tau"],
+            acc             = loss_out["acc"],
+            z_tem_gathered  = loss_out["z_tem_gathered"],
+            z_cell_gathered = loss_out["z_cell_gathered"],
         )
 
     def __repr__(self) -> str:

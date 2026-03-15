@@ -28,7 +28,7 @@ slurm-*.err
 # ── IDE / OS ──────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
-.claude/
+.claude/*
 .DS_Store
 *.swp
 *.swo

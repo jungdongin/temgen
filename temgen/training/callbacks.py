@@ -97,7 +97,10 @@ class RetrievalAccuracyCallback(pl.Callback):
         current_epoch = trainer.current_epoch
         max_epochs = trainer.max_epochs or 0
 
-        is_eval_epoch = (current_epoch % self.eval_every_n_epochs == 0)
+        is_eval_epoch = (
+            current_epoch > 0
+            and current_epoch % self.eval_every_n_epochs == 0
+        )
         is_last_epoch = (current_epoch == max_epochs - 1)
 
         if not (is_eval_epoch or is_last_epoch):

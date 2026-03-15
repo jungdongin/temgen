@@ -152,7 +152,13 @@ class InfoNCELoss(nn.Module):
             acc = ((preds_tc == labels).float().mean()
                    + (preds_ct == labels).float().mean()) / 2.0
 
-        return {"loss": loss, "tau": tau.detach(), "acc": acc}
+        return {
+            "loss": loss,
+            "tau": tau.detach(),
+            "acc": acc,
+            "z_tem_gathered": z_tem.detach(),
+            "z_cell_gathered": z_cell.detach(),
+        }
 
     def __repr__(self) -> str:
         temp_mode = f"fixed={self._fixed_temp}" if self._fixed_temp is not None else "learnable"

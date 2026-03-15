@@ -173,7 +173,7 @@ def read_sample(root: Path, sid: str, prefix: str) -> dict | None:
         angles      = angles,
         a_frac      = a_frac,
         num_atoms   = len(atom_types),
-        sample_id   = sid,
+        sample_id   = prefix,
     )
 
 
@@ -262,7 +262,7 @@ def build_hdf5(split: str, date_str: str, dry_run: bool, resume: bool) -> None:
                 chunks=(min(total_atoms, 100000),))
 
             # sample_ids as fixed-length bytes
-            dt = h5py.string_dtype(encoding="ascii", length=5)
+            dt = h5py.string_dtype(encoding="ascii", length=10)
             f.create_dataset("sample_ids", shape=(N,), dtype=dt)
 
             # store valid_mask so resume pass knows which to skip
@@ -335,7 +335,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--split",   choices=["train", "test"], required=True)
-    parser.add_argument("--date",    default="20300312",
+    parser.add_argument("--date",    default="20260312",
                         help="Date tag for output filename, e.g. 20300312")
     parser.add_argument("--dry-run", action="store_true",
                         help="Process first 10 samples only")

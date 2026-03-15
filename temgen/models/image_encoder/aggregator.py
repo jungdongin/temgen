@@ -48,19 +48,21 @@ import torch.nn.functional as F
 
 class FeedForward(nn.Module):
     """
-    Standard Transformer FFN: Linear → GELU → Linear, with pre-norm.
+    Standard Transformer FFN: Linear → GELU → Dropout → Linear, with pre-norm.
 
     Pre-LayerNorm is applied inside this module so callers don't need to.
     Residual connection is applied here too.
     """
 
-    def __init__(self, d_model: int, d_ff: int):
+    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0):
         super().__init__()
         self.norm = nn.LayerNorm(d_model)
         self.ff   = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -73,18 +75,20 @@ class CrossAttentionBlock(nn.Module):
 
     Q comes from latents, K and V come from context (token sequence Z).
     Residual is applied to Q (latents) only.
+    Uses F.scaled_dot_product_attention for memory-efficient attention.
 
     Args:
         d_model   : token dimension (256)
         n_heads   : number of attention heads (8)
+        dropout   : attention dropout rate (default 0.0)
     """
 
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads = n_heads
         self.d_head  = d_model // n_heads
-        self.scale   = self.d_head ** -0.5
+        self.dropout = dropout
 
         self.norm_q  = nn.LayerNorm(d_model)
         self.norm_kv = nn.LayerNorm(d_model)
@@ -117,15 +121,11 @@ class CrossAttentionBlock(nn.Module):
         K = self.k_proj(kv_n).view(B, N_kv, H, dh).transpose(1, 2)  # (B,H,N_kv,dh)
         V = self.v_proj(kv_n).view(B, N_kv, H, dh).transpose(1, 2)  # (B,H,N_kv,dh)
 
-        # Scaled dot-product attention
-        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale    # (B,H,N_q,N_kv)
-
-        # Optional positional bias (used by Method 2)
-        if attn_bias is not None:
-            scores = scores + attn_bias
-
-        attn   = F.softmax(scores, dim=-1)
-        out    = torch.matmul(attn, V)                                 # (B,H,N_q,dh)
+        # Scaled dot-product attention (uses FlashAttention when possible)
+        drop_p = self.dropout if self.training else 0.0
+        out = F.scaled_dot_product_attention(
+            Q, K, V, attn_mask=attn_bias, dropout_p=drop_p,
+        )                                                              # (B,H,N_q,dh)
 
         # Merge heads and project
         out = out.transpose(1, 2).contiguous().view(B, N_q, D)        # (B,N_q,D)
@@ -138,18 +138,20 @@ class CrossAttentionBlock(nn.Module):
 class SelfAttentionBlock(nn.Module):
     """
     Single self-attention block with pre-norm and residual.
+    Uses F.scaled_dot_product_attention for memory-efficient attention.
 
     Args:
         d_model : token dimension (256)
         n_heads : number of attention heads (8)
+        dropout : attention dropout rate (default 0.0)
     """
 
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads = n_heads
         self.d_head  = d_model // n_heads
-        self.scale   = self.d_head ** -0.5
+        self.dropout = dropout
 
         self.norm    = nn.LayerNorm(d_model)
         self.qkv     = nn.Linear(d_model, 3 * d_model, bias=False)
@@ -165,9 +167,8 @@ class SelfAttentionBlock(nn.Module):
         QKV = self.qkv(x_n).view(B, N, 3, H, dh).permute(2, 0, 3, 1, 4)
         Q, K, V = QKV.unbind(0)                                        # (B,H,N,dh) each
 
-        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-        attn   = F.softmax(scores, dim=-1)
-        out    = torch.matmul(attn, V)                                 # (B,H,N,dh)
+        drop_p = self.dropout if self.training else 0.0
+        out = F.scaled_dot_product_attention(Q, K, V, dropout_p=drop_p)  # (B,H,N,dh)
 
         out = out.transpose(1, 2).contiguous().view(B, N, D)
         out = self.out_proj(out)
@@ -204,12 +205,13 @@ class PerceiverAggregator(nn.Module):
 
     def __init__(
         self,
-        d_model    : int = 256,
-        n_latents  : int = 32,
-        n_heads    : int = 8,
-        L_cross    : int = 1,
-        L_self     : int = 2,
-        d_proj_out : int = 128,
+        d_model    : int   = 256,
+        n_latents  : int   = 32,
+        n_heads    : int   = 8,
+        L_cross    : int   = 1,
+        L_self     : int   = 2,
+        d_proj_out : int   = 128,
+        dropout    : float = 0.0,
     ):
         super().__init__()
 
@@ -228,12 +230,12 @@ class PerceiverAggregator(nn.Module):
         self.cross_blocks = nn.ModuleList()
         for _ in range(L_cross):
             block = nn.ModuleDict({
-                "cross_attn": CrossAttentionBlock(d_model, n_heads),
-                "cross_ff"  : FeedForward(d_model, d_ff),
+                "cross_attn": CrossAttentionBlock(d_model, n_heads, dropout=dropout),
+                "cross_ff"  : FeedForward(d_model, d_ff, dropout=dropout),
                 "self_layers": nn.ModuleList([
                     nn.ModuleDict({
-                        "self_attn": SelfAttentionBlock(d_model, n_heads),
-                        "self_ff"  : FeedForward(d_model, d_ff),
+                        "self_attn": SelfAttentionBlock(d_model, n_heads, dropout=dropout),
+                        "self_ff"  : FeedForward(d_model, d_ff, dropout=dropout),
                     })
                     for _ in range(L_self)
                 ]),
@@ -243,13 +245,14 @@ class PerceiverAggregator(nn.Module):
         # ── Global pooling query ──────────────────────────────────────────────
         # q_glob: (1, 1, D) — cross-attends to final latents → z_TEM
         self.q_glob     = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-        self.pool_cross = CrossAttentionBlock(d_model, n_heads)
+        self.pool_cross = CrossAttentionBlock(d_model, n_heads, dropout=dropout)
         self.pool_norm  = nn.LayerNorm(d_model)
 
         # ── Projection head (A9) — used for InfoNCE only ──────────────────────
         self.img_proj = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(d_model, d_proj_out),
         )
 

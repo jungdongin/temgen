@@ -34,8 +34,6 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from omegaconf import DictConfig
 
-from temgen.models.losses.info_nce import InfoNCELoss
-
 
 class TEMGenLightningModule(pl.LightningModule):
     """
@@ -78,14 +76,12 @@ class TEMGenLightningModule(pl.LightningModule):
         """
         out = self.model(batch)
 
-        loss        = out["loss"]
-        tau         = out["tau"]
-        z_TEM_proj  = out["z_TEM_proj"]    # (B, 128)
-        z_cell_proj = out["z_cell_proj"]   # (B, 128)
+        loss = out["loss"]
+        tau  = out["tau"]
 
-        # ── Retrieval accuracy (top-1, top-5) on gathered embeddings ─────────
-        z_TEM_gathered  = InfoNCELoss._gather(z_TEM_proj)
-        z_cell_gathered = InfoNCELoss._gather(z_cell_proj)
+        # Reuse gathered embeddings from InfoNCE (avoid redundant all_gather)
+        z_TEM_gathered  = out["z_tem_gathered"]
+        z_cell_gathered = out["z_cell_gathered"]
         top1, top5 = self._retrieval_accuracy(z_TEM_gathered, z_cell_gathered)
 
         # ── Logging ───────────────────────────────────────────────────────────
@@ -207,15 +203,16 @@ class TEMGenLightningModule(pl.LightningModule):
         Linear warmup: 0 → 1 over warmup_epochs.
         Cosine decay : 1 → 0 over (max_epochs - warmup_epochs).
         """
+        min_lr_ratio = 0.01  # cosine decays to 1% of peak LR, not to zero
         if epoch < self.warmup_epochs:
             # Linear warmup
             return float(epoch + 1) / float(max(1, self.warmup_epochs))
         else:
-            # Cosine decay
+            # Cosine decay to min_lr_ratio
             progress = float(epoch - self.warmup_epochs) / float(
                 max(1, self.max_epochs - self.warmup_epochs)
             )
-            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+            return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
     # ── Gradient clipping (Lightning hook) ────────────────────────────────────
 
@@ -252,7 +249,7 @@ def _is_no_decay(param_name: str) -> bool:
 
     Standard practice: exclude bias, LayerNorm weights/biases, embeddings.
     """
-    no_decay_keywords = ("bias", "layer_norm", "layernorm", "ln.", "embedding")
+    no_decay_keywords = ("bias", "layer_norm", "layernorm", "ln.", "bn", "embedding")
     return any(kw in param_name.lower() for kw in no_decay_keywords)
 
 
